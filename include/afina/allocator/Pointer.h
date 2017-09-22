@@ -17,7 +17,11 @@ public:
     Pointer &operator=(const Pointer &);
     Pointer &operator=(Pointer &&);
 
-    void *get() const { return 0; }
+    void *get() const { return _addr!=nullptr ? *reinterpret_cast<void**>(_addr) : nullptr; }
+    void *set(void *addr){_addr=addr;return get();}
+    void *getRaw()const{return _addr;}
+private:
+    void* _addr;
 };
 
 } // namespace Allocator

@@ -89,10 +89,11 @@ TEST(SimpleTest, AllocNoMem) {
 
     vector<Pointer> ptr;
     try {
-        for (int i = 0; i < 6; i++) {
+	int i;
+        for (i = 0; i < 6; i++) {
             ptr.push_back(a.alloc(size));
         }
-
+	std::cout<<i;
         EXPECT_TRUE(false);
     } catch (AllocError &e) {
         EXPECT_EQ(e.getType(), AllocErrorType::NoMemory);
