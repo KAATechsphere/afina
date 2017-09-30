@@ -77,6 +77,7 @@ private:
     FreeBlockHeader* getLastFreeBlock();
     void updatePointers(void *start,void *end,long diff);
     void getNeighborFreeBlock(void* fb,FreeBlockHeader* &prevFB,FreeBlockHeader* &nextFB);
+void getNeighborFreeBlock(void* fb,FreeBlockHeader* &prevPrevFB,FreeBlockHeader* &prevFB,FreeBlockHeader* &nextFB);
     FreeBlockHeader* allocDataInFreeBlock(FreeBlockHeader* fb,FreeBlockHeader* prevFb,size_t size);
     void *allocPointer(void* ptr);
 

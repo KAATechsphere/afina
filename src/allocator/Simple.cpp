@@ -25,6 +25,7 @@ void* ptr_subtract(T* ptr,long subtract){
 
 template <class T,class U>
 bool isContigiousBlocks(T* fBlock,U* sBlock){
+    if(fBlock==nullptr || sBlock==nullptr) return false;
     const u8* fBlockLeft=reinterpret_cast<const u8*>(fBlock);
     const u8* fBlockRight=fBlockLeft+sizeof(T)+fBlock->size;
     const u8* sBlockLeft=reinterpret_cast<const u8*>(sBlock);
@@ -83,8 +84,9 @@ lbl1:
                 size_t tempS1=sizeof(FreeBlockHeader)+_lastBlock->size;
                 size_t tempS2=sizeof(AllocationHeader)+N+sizeof(void*);
                 if(tempS1<tempS2){
-                    defrag();
-                    goto lbl1;
+                    //defrag();
+                    //goto lbl1;
+			break;
                 }else if(tempS1<tempS2+sizeof(FreeBlockHeader)+1){
                     ah->size=sizeof(FreeBlockHeader)+_lastBlock->size-sizeof(void*)-sizeof(AllocationHeader);
                     ++_usedMemory;
@@ -104,7 +106,7 @@ lbl1:
     }
 
     defrag();
-    return _isDefragmentated? Pointer() : alloc(N);
+    return alloc(N);
 }
 
 
@@ -114,45 +116,103 @@ lbl1:
  * @param N size_t
  */
 void Simple::realloc(Pointer &p, size_t N) {
-    void *rawPointer=p.getRaw();
-
+    void* rawPointer=p.getRaw();
     if(rawPointer==nullptr){
         p=alloc(N);
         return;
     }
-
     if(rawPointer>ptr_add(_base,_baseLength) || rawPointer<ptr_add(_base,_baseLength-sizeof(void*)*_pointerCount))
         return;
 
     AllocationHeader *src=(AllocationHeader*)ptr_subtract(*reinterpret_cast<void**>(p.getRaw()),sizeof(AllocationHeader));
-
     long diff=N-src->size;
     if(long(_baseLength-_usedMemory-sizeof(void*)*_pointerCount)<diff){
         throw AllocError(AllocErrorType::NoMemory,"");
     }
-
     size_t tempSize=src->size;
-
     if(diff>0){
         if(!_isDefragmentated){
-            defrag();
-            src=(AllocationHeader*)ptr_subtract(*reinterpret_cast<void**>(p.getRaw()),sizeof(AllocationHeader));
-        }
-        std::rotate((u8*)src,(u8*)ptr_add(src,sizeof(AllocationHeader)+src->size),(u8*)_lastBlock);
-        updatePointers(ptr_add(src,sizeof(AllocationHeader)+tempSize),(void*)_lastBlock,-long(src->size+sizeof(AllocationHeader)));
-        AllocationHeader *nah=(AllocationHeader*)ptr_subtract(_lastBlock,sizeof(AllocationHeader)+tempSize);
-        *reinterpret_cast<void**>(rawPointer)=(void*)ptr_add(nah,sizeof(AllocationHeader));
-        if(_lastBlock->size>diff){
-            nah->size+=diff;
-            _usedMemory+=diff;
-            _lastBlock=(FreeBlockHeader*)ptr_add(_lastBlock,diff);
-            _lastBlock->size=_freeBlocks->size-diff;
-            _lastBlock->next=nullptr;
-            _freeBlocks=_lastBlock;
+            FreeBlockHeader*prevPrevFb,*prevFb,*nextFb;
+            getNeighborFreeBlock(rawPointer,prevPrevFb,prevFb,nextFb);
+            FreeBlockHeader *cprevFb=isContigiousBlocks(prevFb,src)?prevFb:nullptr;
+            FreeBlockHeader *cnextFb=isContigiousBlocks(nextFb,src)?nextFb:nullptr;
+            size_t cprevFbSize=cprevFb==nullptr?0:cprevFb->size;
+            size_t cnextFbSize=cnextFb==nullptr?0:cnextFb->size;
+            if(cprevFbSize+cnextFbSize+2*sizeof(FreeBlockHeader)>=diff){
+                if(cnextFbSize+sizeof(FreeBlockHeader)>=diff){
+                    FreeBlockHeader* newFb=nullptr;
+                    if(cnextFbSize>diff){
+                        src->size+=diff;
+                        _usedMemory+=diff;
+                        newFb=reinterpret_cast<FreeBlockHeader*>(ptr_add(nextFb,diff));
+                        newFb->next=nextFb->next;
+                        newFb->size=nextFb->size-diff;
+                    }else{
+                        src->size+=sizeof(FreeBlockHeader)+cnextFbSize;
+                        _usedMemory+=sizeof(FreeBlockHeader)+cnextFbSize;
+                    }
+                    if(prevFb!=nullptr)prevFb->next=newFb;
+                    else _freeBlocks=newFb;
+                    if(nextFb==_lastBlock)_lastBlock=newFb;
+                }else if(cprevFbSize+sizeof(FreeBlockHeader)>=diff){
+                    if(cprevFbSize>diff){
+                        std::memmove((void*)ptr_subtract(src,diff),(void*)src,sizeof(AllocationHeader)+src->size);
+                        src=(AllocationHeader*)ptr_subtract(src,diff);
+                        src->size+=diff;
+                        prevFb->size-=diff;
+                        _usedMemory+=diff;
+                    }else{
+                        std::memmove((void*)prevFb,(void*)src,sizeof(AllocationHeader)+src->size);
+                        src=(AllocationHeader*)prevFb;
+                        src->size+=sizeof(FreeBlockHeader)+cprevFbSize;
+                        if(prevPrevFb!=nullptr)prevPrevFb->next=nextFb;
+                        else _freeBlocks=nextFb;
+                        _usedMemory+=sizeof(FreeBlockHeader)+cprevFbSize;
+                    }
+                    *reinterpret_cast<void**>(rawPointer)=(void*)src;
+                }else{
+                    std::memmove((void*)prevFb,(void*)src,sizeof(AllocationHeader)+src->size);
+                    src=(AllocationHeader*)prevFb;
+                    FreeBlockHeader *newFb=nullptr;
+                    if(cnextFbSize+cprevFbSize+sizeof(FreeBlockHeader)>diff){
+                        src->size+=diff;
+                        _usedMemory+=diff;
+                        newFb=(FreeBlockHeader*)ptr_add(src,sizeof(AllocationHeader)+src->size);
+                        newFb->next=nextFb->next;
+                        newFb->size=cnextFbSize+sizeof(FreeBlockHeader)+cprevFbSize-diff;
+                        if(prevPrevFb!=nullptr)prevPrevFb->next=newFb;
+                        else _freeBlocks=newFb;
+                    }else{
+                        src->size+=2*sizeof(FreeBlockHeader)+cprevFbSize+cnextFbSize;
+                        _usedMemory+=2*sizeof(FreeBlockHeader)+cprevFbSize+cnextFbSize;
+                        if(prevPrevFb!=nullptr)prevPrevFb->next=nextFb->next;
+                        else _freeBlocks=nextFb->next;
+                    }
+                    if(_lastBlock==nextFb)_lastBlock=newFb;
+                    *reinterpret_cast<void**>(rawPointer)=(void*)src;
+                }
+            }else{
+                defrag();
+                realloc(p,N);
+                return;
+            }
         }else{
-            nah->size+=sizeof(FreeBlockHeader)+_lastBlock->size;
-            _usedMemory+=sizeof(FreeBlockHeader)+_lastBlock->size;
-            _lastBlock=_freeBlocks=nullptr;
+            std::rotate((u8*)src,(u8*)ptr_add(src,sizeof(AllocationHeader)+src->size),(u8*)_lastBlock);
+            updatePointers(ptr_add(src,sizeof(AllocationHeader)+tempSize),(void*)_lastBlock,-long(src->size+sizeof(AllocationHeader)));
+            AllocationHeader *nah=(AllocationHeader*)ptr_subtract(_lastBlock,sizeof(AllocationHeader)+tempSize);
+            *reinterpret_cast<void**>(rawPointer)=(void*)ptr_add(nah,sizeof(AllocationHeader));
+            if(_lastBlock->size>diff){
+                nah->size+=diff;
+                _usedMemory+=diff;
+                _lastBlock=(FreeBlockHeader*)ptr_add(_lastBlock,diff);
+                _lastBlock->size=_freeBlocks->size-diff;
+                _lastBlock->next=nullptr;
+                _freeBlocks=_lastBlock;
+            }else{
+                nah->size+=sizeof(FreeBlockHeader)+_lastBlock->size;
+                _usedMemory+=sizeof(FreeBlockHeader)+_lastBlock->size;
+                _lastBlock=_freeBlocks=nullptr;
+            }
         }
     }else if(diff<0){
         if(-diff>sizeof(FreeBlockHeader)){
@@ -177,6 +237,7 @@ void Simple::realloc(Pointer &p, size_t N) {
         }
     }
 }
+
 
 /**
  * TODO: semantics
@@ -315,6 +376,20 @@ void Simple::getNeighborFreeBlock(void* fb,FreeBlockHeader* &prevFB,FreeBlockHea
 
     while(!(prevFB==nullptr || prevFB<fb) || !(nextFB==nullptr || nextFB>fb))
     {
+        prevFB = nextFB;
+        nextFB = nextFB->next;
+    }
+}
+
+void Simple::getNeighborFreeBlock(void *fb, Simple::FreeBlockHeader *&prevPrevFB, Simple::FreeBlockHeader *&prevFB, Simple::FreeBlockHeader *&nextFB)
+{
+    prevPrevFB=nullptr;
+    prevFB = nullptr;
+    nextFB = _freeBlocks;
+
+    while(!(prevFB==nullptr || prevFB<fb) || !(nextFB==nullptr || nextFB>fb))
+    {
+        prevPrevFB=prevFB;
         prevFB = nextFB;
         nextFB = nextFB->next;
     }
