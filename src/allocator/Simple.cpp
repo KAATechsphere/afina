@@ -56,7 +56,6 @@ Pointer Simple::alloc(size_t N) {
     if(!_isDefragmentated && _freePointerCount==0 && (_lastBlock==nullptr || (_lastBlock!=nullptr && _lastBlock->size<=sizeof(void*))))
         defrag();
 
-lbl1:
     FreeBlockHeader* prev_free_block = nullptr;
     FreeBlockHeader* free_block = _freeBlocks;
 
