@@ -83,8 +83,6 @@ Pointer Simple::alloc(size_t N) {
                 size_t tempS1=sizeof(FreeBlockHeader)+_lastBlock->size;
                 size_t tempS2=sizeof(AllocationHeader)+N+sizeof(void*);
                 if(tempS1<tempS2){
-                    //defrag();
-                    //goto lbl1;
 			break;
                 }else if(tempS1<tempS2+sizeof(FreeBlockHeader)+1){
                     ah->size=sizeof(FreeBlockHeader)+_lastBlock->size-sizeof(void*)-sizeof(AllocationHeader);
