@@ -2,6 +2,9 @@
 #include <iostream>
 #include <memory>
 #include <uv.h>
+#include <fstream>
+
+#include <unistd.h>
 
 #include <cxxopts.hpp>
 
@@ -48,6 +51,8 @@ int main(int argc, char **argv) {
         // and simplify validation below
         options.add_options()("s,storage", "Type of storage service to use", cxxopts::value<std::string>());
         options.add_options()("n,network", "Type of network service to use", cxxopts::value<std::string>());
+        options.add_options()("d,daemon", "Launch in the daemon mode");
+        options.add_options()("p,pid", "Write pid to the file",cxxopts::value<std::string>());
         options.add_options()("h,help", "Print usage info");
         options.parse(argc, argv);
 
@@ -58,6 +63,34 @@ int main(int argc, char **argv) {
     } catch (cxxopts::OptionParseException &ex) {
         std::cerr << "Error: " << ex.what() << std::endl;
         return 1;
+    }
+
+    if(options.count("daemon")){
+        pid_t forkRes=fork();
+        if(forkRes==-1){
+            std::cerr<<"Creation of daemon is failed"<<std::endl;
+            return -1;
+        }
+        if(forkRes!=0){
+            return 0;
+        }else{
+            if(setsid()==-1){
+                std::cerr<<"New session creating is failed"<<std::endl;
+                return -1;
+            }
+            if(close(STDOUT_FILENO) || close(STDERR_FILENO) || close(STDIN_FILENO)){
+                std::cerr<<"Input/output streams closing is failed"<<std::endl;
+            }
+        }
+    }
+    if(options.count("pid")){
+        std::ofstream pidFile=std::ofstream(options["pid"].as<std::string>());
+        pidFile<<getpid();
+        pidFile.close();
+        if(!pidFile){
+            std::cerr<<"Writing pid to file failed"<<std::endl;
+            return -1;
+        }
     }
 
     // Start boot sequence
