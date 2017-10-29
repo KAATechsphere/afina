@@ -7,6 +7,7 @@ namespace Backend {
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &value) {
+    std::unique_lock<std::mutex> guard(_lock);
     ++_priorityIndex;
     _backend[key]=value;
     std::pair<size_t,std::string> priorPair;
@@ -29,8 +30,6 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
     }
     _sortedPriorities.insert(priorPair);
     return true;
-    //std::unique_lock<std::mutex> guard(_lock);
-    //return false;
 }
 
 // See MapBasedGlobalLockImpl.h
@@ -51,6 +50,7 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
+    std::unique_lock<std::mutex> guard(_lock);
     if(_backend.count(key)){
         _backend.erase(key);
         auto prioIterator=_priorities.find(key);
@@ -58,19 +58,16 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
         _priorities.erase(prioIterator);
     }
     else return false;
-    //std::unique_lock<std::mutex> guard(_lock);
-    //return false;
 }
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) const {
+    std::unique_lock<std::mutex> guard(*const_cast<std::mutex *>(&_lock));
     auto it=_backend.find(key);
     if(it!=_backend.end()){
         value=it->second;
         return true;
     }else return false;
-    //std::unique_lock<std::mutex> guard(*const_cast<std::mutex *>(&_lock));
-    //return false;
 }
 
 } // namespace Backend

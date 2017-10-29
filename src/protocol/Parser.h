@@ -63,6 +63,15 @@ private:
      * - sg: for GET commands only
      */
     enum State : uint16_t { sCR, sLF, sName, spKey, spFlags, spExprTimeStart, spExprTime, spBytes, sgKey };
+    //sCr - carriage return symbol has been read at previous iteration
+    //sLF - line feed symbol has been read at previous iteration
+    //sName - command name is being read
+    //spKey - key for put command is being read
+    //spFlags - flag is being read
+    //spExprTimeStart - flag has been read
+    //spExprTime - expiration time is being read
+    //spBytes - size of data block is being read
+    //sgKey - key for get command is being read
 
     // Current parser state
     State state;

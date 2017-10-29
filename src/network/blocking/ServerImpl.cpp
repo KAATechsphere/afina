@@ -19,6 +19,9 @@
 
 #include <afina/Storage.h>
 
+#include "../../protocol/Parser.h"
+#include "afina/execute/Command.h"
+
 namespace Afina {
 namespace Network {
 namespace Blocking {
@@ -29,6 +32,21 @@ void *ServerImpl::RunAcceptorProxy(void *p) {
         srv->RunAcceptor();
     } catch (std::runtime_error &ex) {
         std::cerr << "Server fails: " << ex.what() << std::endl;
+    }
+    return 0;
+}
+
+struct ServSocketParam{
+    ServerImpl* serv;
+    int socket;
+};
+
+void *ServerImpl::RunConnectionProxy(void *p) {
+    ServSocketParam param = *((ServSocketParam *)p);
+    try {
+        param.serv->RunConnection(param.socket);
+    } catch (std::runtime_error &ex) {
+        std::cerr << "Connection fails: " << ex.what() << std::endl;
     }
     return 0;
 }
@@ -169,16 +187,23 @@ void ServerImpl::RunAcceptor() {
             close(server_socket);
             throw std::runtime_error("Socket accept() failed");
         }
-
-        // TODO: Start new thread and process data from/to connection
         {
-            std::string msg = "TODO: start new thread and process memcached protocol instead";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
+            std::unique_lock<std::mutex> __lock(connections_mutex);
+            if(connections.size() < max_workers) {
+                pthread_t thread;
+                ServSocketParam param;
+                param.serv=this;
+                param.socket=client_socket;
+
+                if (pthread_create(&thread, NULL, ServerImpl::RunConnectionProxy, &param) != 0) {
+                    close(server_socket);
+                    close(client_socket);
+                    throw std::runtime_error("Could not create connection thread");
+                }
+            }else {
+                std::cout << "Connections limit reached\n";
                 close(client_socket);
-                close(server_socket);
-                throw std::runtime_error("Socket send() failed");
             }
-            close(client_socket);
         }
     }
 
@@ -193,7 +218,7 @@ void ServerImpl::RunAcceptor() {
 }
 
 // See Server.h
-void ServerImpl::RunConnection() {
+void ServerImpl::RunConnection(int client_socket) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     pthread_t self = pthread_self();
 
@@ -203,7 +228,61 @@ void ServerImpl::RunConnection() {
         connections.insert(self);
     }
 
-    // TODO: All connection work is here
+    const size_t bufferLength=100000;
+    char buffer[bufferLength];
+    const size_t dataBufferLength=0x100000+10;
+    std::shared_ptr<char> dataBuffer(new char[dataBufferLength]);
+    Afina::Protocol::Parser parser;
+
+    size_t recvLength,readRecvLength,parsedLength,readBodyLength;
+    uint32_t bodyLength;
+    recvLength=readRecvLength=parsedLength=bodyLength=readBodyLength=0;
+    bool isBody=false;
+    std::unique_ptr<Execute::Command> command;
+    while(running.load()){
+        if((recvLength = read(client_socket, buffer, bufferLength)) >0) {
+            while(readRecvLength<recvLength){
+                if(isBody){
+                    size_t temp=std::min(bodyLength-readBodyLength+2,recvLength-readRecvLength);
+                    std::copy(buffer+readRecvLength,buffer+readRecvLength+temp,dataBuffer.get()+readBodyLength);
+                    readBodyLength+=temp;
+                    readRecvLength+=temp;
+                    if(readBodyLength==bodyLength+2){
+                        isBody=false;
+                        readBodyLength=0;
+                        std::string out;
+                        try{
+                            command->Execute(*pStorage,std::string(dataBuffer.get()+2,dataBuffer.get()+bodyLength),out);
+                            out += "\r\n";
+                            write(client_socket, out.c_str(), out.size());
+                        }catch(std::exception &e){
+                            out=std::string("SERVER_ERROR ")+e.what()+"\r\n";
+                            write(client_socket,out.c_str(),out.size());
+                        }
+                    }
+                }else{
+                    bool res=parser.Parse(buffer+readRecvLength, recvLength-readRecvLength, parsedLength);
+                    if(res){
+                        command=parser.Build(bodyLength);
+                        if(bodyLength==0){
+                            std::string out;
+                            try{
+                                command->Execute(*pStorage,std::string(),out);
+                                out += "\r\n";
+                                write(client_socket, out.c_str(), out.size());
+                            }catch(std::exception &e){
+                                out=std::string("SERVER_ERROR ")+e.what()+"\r\n";
+                                write(client_socket,out.c_str(),out.size());
+                            }
+                        }else isBody=true;
+                    }
+                    readRecvLength+=parsedLength;
+                }
+            }
+        }else break;
+        readRecvLength=0;
+    }
+    close(client_socket);
 
     // Thread is about to stop, remove self from list of connections
     // and it was the very last one, notify main thread
