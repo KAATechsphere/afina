@@ -67,10 +67,6 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     }
 
     make_socket_non_blocking(server_socket);
-    if (listen(server_socket, 5) == -1) {
-        close(server_socket);
-        throw std::runtime_error("Socket listen() failed");
-    }
 
     for (int i = 0; i < n_workers; i++) {
         workers.emplace_back(pStorage);

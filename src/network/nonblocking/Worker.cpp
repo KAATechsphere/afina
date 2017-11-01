@@ -16,6 +16,8 @@
 #include <map>
 #include <memory>
 
+#include <iterator>
+
 #include "Utils.h"
 
 #include "../../protocol/Parser.h"
@@ -25,19 +27,16 @@ namespace Afina {
 namespace Network {
 namespace NonBlocking {
 
-const size_t dataBufferLength=0x100000+10;
-
 struct ParseData{
     ParseData(){
         recvLength=readRecvLength=parsedLength=readBodyLength=0;
         bodyLength=0;
         isBody=false;
-        dataBuffer.reset(new char[dataBufferLength]);
     }
     size_t recvLength,readRecvLength,parsedLength,readBodyLength;
     uint32_t bodyLength;
     bool isBody=false,isErrorLine=false;
-    std::shared_ptr<char> dataBuffer;
+    std::string dataBuffer;
     Afina::Protocol::Parser parser;
     std::unique_ptr<Execute::Command> command;
 };
@@ -93,6 +92,7 @@ void* Worker::OnRunProxy(void *args){
 std::string Worker::ParseAndExecute(char *buffer, ParseData& parseData)
 {
     std::string out;
+    parseData.readRecvLength=0;
     while(parseData.readRecvLength<parseData.recvLength){
         if(parseData.isErrorLine){
             for(parseData.readRecvLength;parseData.readRecvLength<parseData.recvLength && buffer[parseData.readRecvLength]!='\n';++parseData.readRecvLength);
@@ -102,7 +102,7 @@ std::string Worker::ParseAndExecute(char *buffer, ParseData& parseData)
         }
         if(parseData.isBody){
             size_t temp=std::min(parseData.bodyLength-parseData.readBodyLength+2,parseData.recvLength-parseData.readRecvLength);
-            std::copy(buffer+parseData.readRecvLength,buffer+parseData.readRecvLength+temp,parseData.dataBuffer.get()+parseData.readBodyLength);
+            std::copy(buffer+parseData.readRecvLength,buffer+parseData.readRecvLength+temp,std::back_inserter(parseData.dataBuffer));
             parseData.readBodyLength+=temp;
             parseData.readRecvLength+=temp;
             if(parseData.readBodyLength==parseData.bodyLength+2){
@@ -110,12 +110,12 @@ std::string Worker::ParseAndExecute(char *buffer, ParseData& parseData)
                 parseData.readBodyLength=0;
                 try{
                     std::string temp;
-                    std::cout<<"hmm: "<<parseData.dataBuffer.get()<<std::endl;
-                    parseData.command->Execute(*pStorage,std::string(parseData.dataBuffer.get(),parseData.dataBuffer.get()+parseData.bodyLength),temp);
+                    parseData.command->Execute(*pStorage,parseData.dataBuffer,temp);
                     out +=temp+ "\r\n";
                 }catch(std::exception &e){
                     out+=std::string("SERVER_ERROR ")+e.what()+"\r\n";
                 }
+                parseData.dataBuffer.clear();
             }
         }else{
             bool res;

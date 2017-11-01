@@ -189,6 +189,7 @@ void ServerImpl::RunAcceptor() {
             throw std::runtime_error("Socket accept() failed");
         }
         {
+            //TODO: lock only
             std::unique_lock<std::mutex> __lock(connections_mutex);
             if(connections.size() < max_workers) {
                 pthread_t thread;
@@ -202,6 +203,7 @@ void ServerImpl::RunAcceptor() {
                     delete &param;
                     throw std::runtime_error("Could not create connection thread");
                 }
+                pthread_detach(thread);
             }else {
                 std::cout << "Connections limit reached\n";
                 close(client_socket);
@@ -233,6 +235,7 @@ void ServerImpl::RunConnection(int client_socket) {
     const size_t bufferLength=100000;
     char buffer[bufferLength];
     const size_t dataBufferLength=0x100000+10;
+    //TODO little size for dataBuffer
     std::shared_ptr<char> dataBuffer(new char[dataBufferLength]);
     Afina::Protocol::Parser parser;
 
