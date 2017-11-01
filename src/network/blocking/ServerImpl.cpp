@@ -239,11 +239,17 @@ void ServerImpl::RunConnection(int client_socket) {
     size_t recvLength,readRecvLength,parsedLength,readBodyLength;
     uint32_t bodyLength;
     recvLength=readRecvLength=parsedLength=bodyLength=readBodyLength=0;
-    bool isBody=false;
+    bool isBody=false,isErrorLine=false;
     std::unique_ptr<Execute::Command> command;
     while(running.load()){
         if((recvLength = read(client_socket, buffer, bufferLength)) >0) {
             while(readRecvLength<recvLength){
+                if(isErrorLine){
+                    for(readRecvLength;readRecvLength<recvLength && buffer[readRecvLength]!='\n';++readRecvLength);
+                    if(readRecvLength<recvLength && buffer[readRecvLength]=='\n') isErrorLine=false;
+                    readRecvLength++;
+                    continue;
+                }
                 if(isBody){
                     size_t temp=std::min(bodyLength-readBodyLength+2,recvLength-readRecvLength);
                     std::copy(buffer+readRecvLength,buffer+readRecvLength+temp,dataBuffer.get()+readBodyLength);
@@ -268,10 +274,9 @@ void ServerImpl::RunConnection(int client_socket) {
                         res=parser.Parse(buffer+readRecvLength, recvLength-readRecvLength, parsedLength);
                     }catch(std::runtime_error& e){
                         std::string out=std::string("SERVER ERROR ")+e.what()+"\r\n";
-                        size_t offset=0;
-                        for(offset;readRecvLength+offset<recvLength && buffer[readRecvLength+offset]!='\n';++offset);
-                        readRecvLength+=offset+1;
                         write(client_socket,out.c_str(),out.size());
+                        isErrorLine=true;
+                        continue;
                     }
                     if(res){
                         command=parser.Build(bodyLength);

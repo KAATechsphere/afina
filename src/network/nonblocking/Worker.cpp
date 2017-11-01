@@ -36,7 +36,7 @@ struct ParseData{
     }
     size_t recvLength,readRecvLength,parsedLength,readBodyLength;
     uint32_t bodyLength;
-    bool isBody=false;
+    bool isBody=false,isErrorLine=false;
     std::shared_ptr<char> dataBuffer;
     Afina::Protocol::Parser parser;
     std::unique_ptr<Execute::Command> command;
@@ -94,6 +94,12 @@ std::string Worker::ParseAndExecute(char *buffer, ParseData& parseData)
 {
     std::string out;
     while(parseData.readRecvLength<parseData.recvLength){
+        if(parseData.isErrorLine){
+            for(parseData.readRecvLength;parseData.readRecvLength<parseData.recvLength && buffer[parseData.readRecvLength]!='\n';++parseData.readRecvLength);
+            if(parseData.readRecvLength<parseData.recvLength && buffer[parseData.readRecvLength]=='\n') parseData.isErrorLine=false;
+            parseData.readRecvLength++;
+            continue;
+        }
         if(parseData.isBody){
             size_t temp=std::min(parseData.bodyLength-parseData.readBodyLength+2,parseData.recvLength-parseData.readRecvLength);
             std::copy(buffer+parseData.readRecvLength,buffer+parseData.readRecvLength+temp,parseData.dataBuffer.get()+parseData.readBodyLength);
@@ -117,9 +123,7 @@ std::string Worker::ParseAndExecute(char *buffer, ParseData& parseData)
                 res=parseData.parser.Parse(buffer+parseData.readRecvLength, parseData.recvLength-parseData.readRecvLength, parseData.parsedLength);
             }catch(std::runtime_error& e){
                 out+=std::string("SERVER ERROR ")+e.what()+"\r\n";
-                size_t offset=0;
-                for(offset;parseData.readRecvLength+offset<parseData.recvLength && buffer[parseData.readRecvLength+offset]!='\n';++offset);
-                parseData.readRecvLength+=offset+1;
+                parseData.isErrorLine=true;
                 continue;
             }
             if(res){

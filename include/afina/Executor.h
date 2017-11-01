@@ -8,8 +8,12 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <pthread.h>
 
 namespace Afina {
+
+class Executor;
+void *perform(void *exec);
 
 /**
  * # Thread pool
@@ -70,7 +74,7 @@ private:
     /**
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
-    friend void perform(Executor *executor);
+    friend void* perform(void *executor);
 
     /**
      * Mutex to protect state below from concurrent modification
@@ -85,7 +89,7 @@ private:
     /**
      * Vector of actual threads that perorm execution
      */
-    std::vector<std::thread> threads;
+    std::vector<pthread_t> threads;
 
     /**
      * Task queue
@@ -97,6 +101,8 @@ private:
      */
     State state;
 };
+
+void *perform(void *exec);
 
 } // namespace Afina
 

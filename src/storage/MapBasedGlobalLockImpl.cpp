@@ -28,6 +28,7 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
     std::unique_lock<std::mutex> guard(_lock);
+    //change count to erase
     if(_backend.count(key)){
         _backend.erase(key);
         auto prioIterator=_priorities.find(key);
@@ -53,6 +54,8 @@ bool MapBasedGlobalLockImpl::UnblockedPut(const std::string &key, const std::str
     _backend[key]=value;
     std::pair<size_t,std::string> priorPair;
     std::map<std::string,size_t>::iterator priorIterator;
+
+    //TODO: find not count
     if(_backend.count(key)){
         priorIterator=_priorities.find(key);
         priorPair=std::make_pair(priorIterator->second,key);
