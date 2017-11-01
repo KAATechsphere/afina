@@ -38,7 +38,8 @@ public:
 
     // Implements Afina::Storage interface
     bool Get(const std::string &key, std::string &value) const override;
-
+protected:
+    bool UnblockedPut(const std::string &key, const std::string &value);
 private:
     std::mutex _lock;
 

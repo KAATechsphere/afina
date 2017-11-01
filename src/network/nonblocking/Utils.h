@@ -7,6 +7,7 @@ namespace NonBlocking {
 
 void make_socket_non_blocking(int sfd);
 
+
 } // namespace NonBlocking
 } // namespace Network
 } // namespace Afina

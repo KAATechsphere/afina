@@ -43,6 +43,7 @@ struct ServSocketParam{
 
 void *ServerImpl::RunConnectionProxy(void *p) {
     ServSocketParam param = *((ServSocketParam *)p);
+    delete ((ServSocketParam *)p);
     try {
         param.serv->RunConnection(param.socket);
     } catch (std::runtime_error &ex) {
@@ -191,13 +192,14 @@ void ServerImpl::RunAcceptor() {
             std::unique_lock<std::mutex> __lock(connections_mutex);
             if(connections.size() < max_workers) {
                 pthread_t thread;
-                ServSocketParam param;
+                ServSocketParam &param=*(new ServSocketParam());
                 param.serv=this;
                 param.socket=client_socket;
 
                 if (pthread_create(&thread, NULL, ServerImpl::RunConnectionProxy, &param) != 0) {
                     close(server_socket);
                     close(client_socket);
+                    delete &param;
                     throw std::runtime_error("Could not create connection thread");
                 }
             }else {
@@ -252,7 +254,7 @@ void ServerImpl::RunConnection(int client_socket) {
                         readBodyLength=0;
                         std::string out;
                         try{
-                            command->Execute(*pStorage,std::string(dataBuffer.get()+2,dataBuffer.get()+bodyLength),out);
+                            command->Execute(*pStorage,std::string(dataBuffer.get(),dataBuffer.get()+bodyLength),out);
                             out += "\r\n";
                             write(client_socket, out.c_str(), out.size());
                         }catch(std::exception &e){
@@ -261,9 +263,19 @@ void ServerImpl::RunConnection(int client_socket) {
                         }
                     }
                 }else{
-                    bool res=parser.Parse(buffer+readRecvLength, recvLength-readRecvLength, parsedLength);
+                    bool res;
+                    try{
+                        res=parser.Parse(buffer+readRecvLength, recvLength-readRecvLength, parsedLength);
+                    }catch(std::runtime_error& e){
+                        std::string out=std::string("SERVER ERROR ")+e.what()+"\r\n";
+                        size_t offset=0;
+                        for(offset;readRecvLength+offset<recvLength && buffer[readRecvLength+offset]!='\n';++offset);
+                        readRecvLength+=offset+1;
+                        write(client_socket,out.c_str(),out.size());
+                    }
                     if(res){
                         command=parser.Build(bodyLength);
+                        parser.Reset();
                         if(bodyLength==0){
                             std::string out;
                             try{
@@ -277,9 +289,11 @@ void ServerImpl::RunConnection(int client_socket) {
                         }else isBody=true;
                     }
                     readRecvLength+=parsedLength;
+                    if(res)parsedLength=0;
                 }
             }
-        }else break;
+        }else
+            break;
         readRecvLength=0;
     }
     close(client_socket);
