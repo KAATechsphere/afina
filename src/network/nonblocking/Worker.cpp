@@ -165,7 +165,8 @@ void Worker::Start(int serv_socket) {
     WorkerNet *wn=new WorkerNet();
     wn->sin=sin;
     wn->worker=this;
-    if (pthread_create(&worker_thread, NULL, Worker::OnRunProxy, wn) < 0) {
+
+    if ((thread=pthread_create(&worker_thread, NULL, Worker::OnRunProxy, wn)) < 0) {
         delete wn;
         throw std::runtime_error("Could not create server thread");
     }
@@ -173,14 +174,13 @@ void Worker::Start(int serv_socket) {
 
 // See Worker.h
 void Worker::Stop() {
-    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+    isStop=true;
     // TODO: implementation here
 }
 
 // See Worker.h
 void Worker::Join() {
-    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
-    // TODO: implementation here
+    pthread_join(thread, 0);
 }
 
 // See Worker.h
