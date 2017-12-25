@@ -40,6 +40,7 @@ sub make_afina_socket {
 			PeerAddr => "$server:$port",
 			Proto => "tcp"
 		);
+		print "Socket connection created\n";
 		return ($socket, $socket);
 	}
 }
