@@ -4,6 +4,8 @@
 #include <memory>
 #include <pthread.h>
 #include <map>
+#include <atomic>
+#include <sys/epoll.h>
 
 namespace Afina {
 
@@ -23,6 +25,7 @@ struct ParseData;
 class Worker {
 public:
     Worker(std::shared_ptr<Afina::Storage> ps);
+    Worker(const Worker&);
     ~Worker();
 
     /**
@@ -30,7 +33,7 @@ public:
      * socket. Once connection accepted it must be registered and being processed
      * on this thread
      */
-    void Start(int server_socket);
+    void Start(uint32_t port);
 
     /**
      * Signal background thread to stop. After that signal thread must stop to
@@ -50,16 +53,32 @@ protected:
     /**
      * Method executing by background thread
      */
-    void OnRun(int server_socket);
     static void* OnRunProxy(void *args);
+    void OnRun(int server_socket);
+    void handleEvent(struct epoll_event event);
 
-    std::string ParseAndExecute(char* buffer, Afina::Network::NonBlocking::ParseData &parseData);
+    void ParseAndExecute(char* _buffer, ParseData &pd);
 
 private:
-    std::shared_ptr<Afina::Storage> pStorage;
-    pthread_t thread;
 
-    bool isStop;
+    std::map<int,ParseData> _parseInfo;
+
+    std::shared_ptr<Afina::Storage> _pStorage;
+
+    pthread_t _thread;
+
+    int _serverSocket;
+    //Count of sockets which are served by worker
+    int _servedSocketsCount;
+
+    static const int maxEvents=100;
+
+    int _epoll;
+
+    static const size_t bufferLength=100000;
+    char _buffer[bufferLength];
+
+    std::atomic<bool> _isStop;
 };
 
 } // namespace NonBlocking
