@@ -1,5 +1,5 @@
 #include "afina/Executor.h"
-
+#include <iostream>
 
 
 Afina::Executor::Executor(std::string name, int size){
@@ -33,7 +33,11 @@ void *Afina::perform(void *exec){
         std::function<void()> ff=executor->tasks.front();
         executor->tasks.pop_front();
         lock.unlock();
-        ff();
+        try{
+            ff();
+        }catch(const std::exception& e){
+            std::cout<<e.what()<<std::endl;
+        }
         lock.lock();
     }
 }
