@@ -167,7 +167,9 @@ void Worker::ParseAndExecute(char *buffer, ParseData& pd)
 // See Worker.h
 Worker::Worker(std::shared_ptr<Afina::Storage> ps):_pStorage(ps){}
 
-Worker::Worker(const Worker &){}
+Worker::Worker(const Worker &){
+    _isStop.store(false);
+}
 
 // See Worker.h
 Worker::~Worker() {
@@ -176,7 +178,7 @@ Worker::~Worker() {
 
 // See Worker.h
 void Worker::Start(uint32_t port) {
-    //std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+    std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
     _isStop.store(false);
     pthread_t worker_thread;
@@ -210,7 +212,7 @@ void Worker::OnRun(int server_socket) {
     }
 
     struct epoll_event event;
-    event.events=EPOLLIN|EPOLLOUT;
+    event.events=EPOLLIN|EPOLLET;
     event.data.fd=server_socket;
 
     if(epoll_ctl(_epoll, EPOLL_CTL_ADD, server_socket, &event) == -1) {
@@ -224,7 +226,7 @@ void Worker::OnRun(int server_socket) {
 
     _servedSocketsCount=1;
 
-    while(_isStop.load()){
+    while(!(_isStop.load())){
         //wait for 1 second
         int sock_event_count=epoll_wait(_epoll, outEvents, maxEvents, 1000);
 
@@ -245,69 +247,65 @@ void Worker::OnRun(int server_socket) {
     close(server_socket);
 }
 
-void Worker::handleEvent(struct epoll_event event)
+void Worker::handleEvent(struct epoll_event &event)
 {
     if(event.data.fd==_serverSocket){
-        struct sockaddr in_addr;
-        socklen_t in_len = sizeof(in_addr);
-        int client_socket = -1;
+        while(true){
+            struct sockaddr in_addr;
+            socklen_t in_len = sizeof(in_addr);
+            int client_socket = -1;
 
-        if((client_socket = accept(_serverSocket, &in_addr, &in_len)) == -1) {
-            std::cout<<"Error accept socket"<<std::endl;
-            close(client_socket);
-            return;
+            if((client_socket = accept(_serverSocket, &in_addr, &in_len)) == -1) {
+                if(errno!=EAGAIN && errno!=EWOULDBLOCK){
+                    std::cout<<"Error accept socket"<<std::endl;
+                    close(client_socket);
+                }
+                return;
+            }
+            if (_servedSocketsCount == maxEvents){
+                std::cout << "Event array is full" << std::endl;
+                close(client_socket);
+                return;
+            }
+
+            make_socket_non_blocking(client_socket);
+
+            struct epoll_event client_sock_event;
+            client_sock_event.events=EPOLLET | EPOLLIN | EPOLLOUT;
+            client_sock_event.data.fd=client_socket;
+
+            if(epoll_ctl(_epoll, EPOLL_CTL_ADD, client_socket, &client_sock_event) == -1) {
+                close(client_socket);
+                std::cout<<"Could not add to epoll socket"<<std::endl;
+                return;
+            }
+
+            _parseInfo[client_socket]=ParseData();
+            ++_servedSocketsCount;
         }
-        if (_servedSocketsCount == maxEvents){
-            std::cout << "Event array is full" << std::endl;
-            close(client_socket);
-            return;
-        }
-
-        make_socket_non_blocking(client_socket);
-
-        struct epoll_event client_sock_event;
-        client_sock_event.events=EPOLLIN | EPOLLRDHUP;
-        client_sock_event.data.fd=client_socket;
-
-        if(epoll_ctl(_epoll, EPOLL_CTL_ADD, client_socket, &client_sock_event) == -1) {
-            close(client_socket);
-            std::cout<<"Could not add to epoll socket"<<std::endl;
-            return;
-        }
-
-        _parseInfo[client_socket]=ParseData();
-        ++_servedSocketsCount;
     }else{
         int client_socket=event.data.fd;
         ParseData &parseData=_parseInfo[client_socket];
         if (event.events & EPOLLIN){
             if((parseData.recvLength = read(client_socket, _buffer, bufferLength)) >0) {
                 ParseAndExecute(_buffer,parseData);
-                if(parseData.outBuffer.size()){
+                while(parseData.outBuffer.size()>0){
                     size_t sended=write(client_socket,parseData.outBuffer.c_str(),parseData.outBuffer.size());
-                    if(sended>0)parseData.outBuffer.erase(0,sended);
-                    if(parseData.outBuffer.size()){
-                        struct epoll_event client_sock_event;
-                        client_sock_event.events=EPOLLOUT | EPOLLIN | EPOLLRDHUP;
-                        client_sock_event.data.fd=client_socket;
-                        if(epoll_ctl(_epoll, EPOLL_CTL_MOD, client_socket, &client_sock_event) == -1) {
-                            std::cout<<"Could not update event of socket in epoll"<<std::endl;
-                        }
-                    }
+                    if(sended>0) parseData.outBuffer.erase(0,sended);
+                    else break;
                 }
+            }else if(parseData.recvLength!=EINTR && parseData.recvLength!=EWOULDBLOCK && parseData.recvLength!=EAGAIN){
+                epoll_ctl(_epoll, EPOLL_CTL_DEL, client_socket,0);
+                --_servedSocketsCount;
+                close(client_socket);
+                _parseInfo.erase(client_socket);
             }
         }
         if (event.events & EPOLLOUT){
-            if(parseData.outBuffer.size()){
+            while(parseData.outBuffer.size()){
                 size_t sended=write(client_socket,parseData.outBuffer.c_str(),parseData.outBuffer.size());
                 if(sended>0)parseData.outBuffer.erase(0,sended);
-            }else{
-                struct epoll_event client_sock_event;
-                client_sock_event.events= EPOLLIN | EPOLLRDHUP;
-                client_sock_event.data.fd=client_socket;
-                if(epoll_ctl(_epoll, EPOLL_CTL_MOD, client_socket, &client_sock_event) == -1) {
-                    std::cout<<"Could not update event of socket in epoll"<<std::endl;
-                }
+                else break;
             }
         }
 

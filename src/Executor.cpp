@@ -14,21 +14,22 @@ Afina::Executor::Executor(std::string name, int size){
 }
 
 void Afina::Executor::Stop(bool await){
-    state=State::kStopping;
-    //memory barrier
+    state.store(State::kStopping);
+    empty_condition.notify_all();
     for(int i=0;i<threads.size();++i)
         pthread_join(threads[i],NULL);
-    state=State::kStopped;
+    state.store(State::kStopped);
 }
 
 void *Afina::perform(void *exec){
     Executor *executor=reinterpret_cast<Executor*>(exec);
     std::unique_lock<std::mutex> lock(executor->mutex);
-    //volatile executor->state
-    //make atomic executor->state
-    while(executor->state==Executor::State::kRun){
-        while(executor->tasks.size()==0)
-            executor->empty_condition.wait(lock);
+
+    while(executor->state.load()==Executor::State::kRun){
+        while(executor->tasks.size()==0){
+            executor->empty_condition.wait_for(lock,std::chrono::milliseconds(500));
+            if(executor->state.load()!=Executor::State::kRun)break;
+        }
         std::function<void()> ff=executor->tasks.front();
         executor->tasks.pop_front();
         lock.unlock();

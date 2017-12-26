@@ -55,7 +55,7 @@ protected:
      */
     static void* OnRunProxy(void *args);
     void OnRun(int server_socket);
-    void handleEvent(struct epoll_event event);
+    void handleEvent(epoll_event &event);
 
     void ParseAndExecute(char* _buffer, ParseData &pd);
 

@@ -35,7 +35,7 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
 
     for (int i = 0; i < n_workers; i++) {
         workers.emplace_back(pStorage);
-        //workers.back().Start(port);
+        workers.back().Start(port);
     }
 }
 

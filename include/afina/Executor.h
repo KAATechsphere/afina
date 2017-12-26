@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 #include <pthread.h>
+#include <atomic>
 
 namespace Afina {
 
@@ -54,7 +55,7 @@ class Executor {
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
         std::unique_lock<std::mutex> lock(this->mutex);
-        if (state != State::kRun) {
+        if (state.load() != State::kRun) {
             return false;
         }
 
@@ -99,7 +100,7 @@ private:
     /**
      * Flag to stop bg threads
      */
-    State state;
+    std::atomic<State> state;
 };
 
 void *perform(void *exec);
