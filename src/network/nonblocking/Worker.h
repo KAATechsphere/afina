@@ -6,6 +6,7 @@
 #include <map>
 #include <atomic>
 #include <sys/epoll.h>
+#include <list>
 
 namespace Afina {
 
@@ -15,7 +16,12 @@ class Storage;
 namespace Network {
 namespace NonBlocking {
 
-struct ParseData;
+class ConnectionCloseException:public std::runtime_error{
+public:
+    ConnectionCloseException():std::runtime_error("Connection closed"){}
+};
+
+struct ConnectionData;
 
 /**
  * # Thread running epoll
@@ -56,26 +62,27 @@ protected:
     static void* OnRunProxy(void *args);
     void OnRun(int server_socket);
     void handleEvent(epoll_event &event);
+    void closeConnection(ConnectionData * pd);
+    void recvRequest(ConnectionData* pd);
+    void sendAnswer(ConnectionData* pd);
 
-    void ParseAndExecute(char* _buffer, ParseData &pd);
+    bool parseAndExecute(char* buffer,size_t bufferLen,ConnectionData &pd);
 
 private:
 
-    std::map<int,ParseData> _parseInfo;
-
     std::shared_ptr<Afina::Storage> _pStorage;
+
+    std::list<ConnectionData*> connections;
 
     pthread_t _thread;
 
     int _serverSocket;
-    //Count of sockets which are served by worker
-    int _servedSocketsCount;
 
     static const int maxEvents=100;
 
     int _epoll;
 
-    static const size_t bufferLength=100000;
+    static const size_t bufferLength=10000;
     char _buffer[bufferLength];
 
     std::atomic<bool> _isStop;

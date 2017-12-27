@@ -24,24 +24,29 @@
 #include "afina/execute/Command.h"
 
 #include <cstring>
+#include <list>
 
 namespace Afina {
 namespace Network {
 namespace NonBlocking {
 
-struct ParseData{
-    size_t recvLength,readRecvLength,parsedLength,readBodyLength;
+enum class ParseState{CmdWaiting,ValueWaiting,CmdExecuting};
+
+struct ConnectionData{
+    int socket;
+    ParseState state;
+    size_t readBodyLength;
     uint32_t bodyLength;
-    bool isBody=false,isErrorLine=false;
     std::string dataBuffer;
     Afina::Protocol::Parser parser;
     std::unique_ptr<Execute::Command> command;
-    std::string outBuffer;
 
-    ParseData(){
-        recvLength=readRecvLength=parsedLength=readBodyLength=0;
+    std::list<std::string> out;
+
+    ConnectionData(int connectionSocket){
+        socket=connectionSocket;
+        readBodyLength=0;
         bodyLength=0;
-        isBody=false;
     }
 };
 
@@ -100,70 +105,68 @@ void* Worker::OnRunProxy(void *args){
     wn.worker->OnRun(server_socket);
 }
 
-void Worker::ParseAndExecute(char *buffer, ParseData& pd)
-{
+bool Worker::parseAndExecute(char* buffer,size_t bufferLen,ConnectionData &pd){
+    size_t parsedLength=10;
+    size_t appendLength;
+    char *parsedPtr=buffer;
     std::string out;
-    pd.readRecvLength=0;
-    while(pd.readRecvLength<pd.recvLength){
-        //In case of error in the command skip all characters before EOL
-        if(pd.isErrorLine){
-            for(pd.readRecvLength;pd.readRecvLength<pd.recvLength && buffer[pd.readRecvLength]!='\n';++pd.readRecvLength);
-            if(pd.readRecvLength<pd.recvLength && buffer[pd.readRecvLength]=='\n') pd.isErrorLine=false;
-            pd.readRecvLength++;
-            continue;
-        }
-
-        if(pd.isBody){
-            //Get maximum number of body's characters which can be readed
-            size_t temp=std::min(pd.bodyLength-pd.readBodyLength+2,pd.recvLength-pd.readRecvLength);
-            std::copy(buffer+pd.readRecvLength,buffer+pd.readRecvLength+temp,std::back_inserter(pd.dataBuffer));
-            pd.readBodyLength+=temp;
-            pd.readRecvLength+=temp;
-            //If body is readed we'll try to execute command
-            if(pd.readBodyLength==pd.bodyLength+2){
-                pd.isBody=false;
-                pd.readBodyLength=0;
-                try{
-                    std::string temp;
-                    pd.command->Execute(*_pStorage,pd.dataBuffer,temp);
-                    out +=temp+ "\r\n";
-                }catch(std::exception &e){
-                    out+=std::string("SERVER_ERROR ")+e.what()+"\r\n";
-                }
-                pd.dataBuffer.clear();
-            }
-        }else{
-            bool res;
+    bool res=true;
+    bool isCommandParsed=false;
+    while(res){
+        switch(pd.state){
+        case ParseState::CmdWaiting:
             try{
-                res=pd.parser.Parse(buffer+pd.readRecvLength, pd.recvLength-pd.readRecvLength, pd.parsedLength);
+                //We will stop call parser if it parsed command
+                //or it didn't parsed command and parsed length equals zero
+                //or there are no any characters for parsing
+                do{
+                    isCommandParsed=pd.parser.Parse(parsedPtr, buffer+bufferLen-parsedPtr, parsedLength);
+                    parsedPtr+=parsedLength;
+                }while((parsedLength!=0 || !isCommandParsed) && !isCommandParsed && parsedPtr<buffer+bufferLen);
             }catch(std::runtime_error& e){
                 out+=std::string("SERVER ERROR ")+e.what()+"\r\n";
-                pd.isErrorLine=true;
+                res=false;
                 continue;
             }
-            //if command type successfully parsed
-            if(res){
-                pd.command=pd.parser.Build(pd.bodyLength);
-                pd.parser.Reset();
-                if(pd.bodyLength==0){
-                    try{
-                        std::string temp;
-                        pd.command->Execute(*_pStorage,std::string(),temp);
-                        out += temp+"\r\n";
-                    }catch(std::exception &e){
-                        out+=std::string("SERVER_ERROR ")+e.what()+"\r\n";
-                    }
-                }else{
-                    pd.isBody=true;
-                }
+            if(!isCommandParsed && parsedPtr<buffer+bufferLen){
+                res=false;
+                continue;
             }
-            pd.readRecvLength+=pd.parsedLength;
-            if(res)pd.parsedLength=0;
+            if(isCommandParsed){
+                pd.command=pd.parser.Build(pd.bodyLength);
+                pd.state=pd.bodyLength==0? ParseState::CmdExecuting : ParseState::ValueWaiting;
+                pd.dataBuffer.reserve(pd.bodyLength);
+            }
+            break;
+        case ParseState::ValueWaiting:
+            appendLength=std::min(pd.bodyLength-pd.readBodyLength+2,bufferLen-(parsedPtr-buffer));
+            std::copy(parsedPtr,parsedPtr+appendLength,std::back_inserter(pd.dataBuffer));
+            parsedPtr+=appendLength;
+            pd.readBodyLength+=appendLength;
+            if(pd.readBodyLength==pd.bodyLength+2){
+                pd.state=ParseState::CmdExecuting;
+            }
+            break;
+        case ParseState::CmdExecuting:
+            try{
+                std::string temp;
+                pd.command->Execute(*_pStorage,pd.dataBuffer,temp);
+                out += temp+"\r\n";
+            }catch(std::exception &e){
+                out+=std::string("SERVER_ERROR ")+e.what()+"\r\n";
+                res=false;
+                continue;
+            }
+            pd.state=ParseState::CmdWaiting;
+            break;
+        }
+        if(parsedPtr>=buffer+bufferLen && pd.state!=ParseState::CmdExecuting){
+            break;
         }
     }
-    pd.outBuffer+=out;
+    pd.out.push_back(out);
+    return res;
 }
-
 // See Worker.h
 Worker::Worker(std::shared_ptr<Afina::Storage> ps):_pStorage(ps){}
 
@@ -224,11 +227,8 @@ void Worker::OnRun(int server_socket) {
 
     struct epoll_event outEvents[Worker::maxEvents];
 
-    _servedSocketsCount=1;
-
     while(!(_isStop.load())){
-        //wait for 1 second
-        int sock_event_count=epoll_wait(_epoll, outEvents, maxEvents, 1000);
+        int sock_event_count=epoll_wait(_epoll, outEvents, maxEvents, 100);
 
         if(sock_event_count==-1 && errno!=EINTR) throw std::runtime_error("Epoll wait error");
 
@@ -241,15 +241,21 @@ void Worker::OnRun(int server_socket) {
         }
     }
 
-    for(auto it=_parseInfo.begin();it!=_parseInfo.end();++it){
-        close(it->first);
+    for(auto it=connections.begin();it!=connections.end();++it){
+        ConnectionData *pd=*it;
+        epoll_ctl(_epoll, EPOLL_CTL_DEL, pd->socket,0);
+        close(pd->socket);
+        delete pd;
     }
+    connections.clear();
+
     close(server_socket);
 }
 
 void Worker::handleEvent(struct epoll_event &event)
 {
-    if(event.data.fd==_serverSocket){
+    int socket=event.data.fd;
+    if(socket=_serverSocket){
         while(true){
             struct sockaddr in_addr;
             socklen_t in_len = sizeof(in_addr);
@@ -262,7 +268,7 @@ void Worker::handleEvent(struct epoll_event &event)
                 }
                 return;
             }
-            if (_servedSocketsCount == maxEvents){
+            if (connections.size() == maxEvents){
                 std::cout << "Event array is full" << std::endl;
                 close(client_socket);
                 return;
@@ -271,52 +277,88 @@ void Worker::handleEvent(struct epoll_event &event)
             make_socket_non_blocking(client_socket);
 
             struct epoll_event client_sock_event;
-            client_sock_event.events=EPOLLET | EPOLLIN | EPOLLOUT;
+            client_sock_event.events=EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLERR;
             client_sock_event.data.fd=client_socket;
+            ConnectionData *pd=new ConnectionData(client_socket);
+            client_sock_event.data.ptr=(void*)pd;
 
             if(epoll_ctl(_epoll, EPOLL_CTL_ADD, client_socket, &client_sock_event) == -1) {
                 close(client_socket);
+                delete pd;
                 std::cout<<"Could not add to epoll socket"<<std::endl;
                 return;
             }
 
-            _parseInfo[client_socket]=ParseData();
-            ++_servedSocketsCount;
+            connections.push_back(pd);
         }
     }else{
-        int client_socket=event.data.fd;
-        ParseData &parseData=_parseInfo[client_socket];
-        if (event.events & EPOLLIN){
-            if((parseData.recvLength = read(client_socket, _buffer, bufferLength)) >0) {
-                ParseAndExecute(_buffer,parseData);
-                while(parseData.outBuffer.size()>0){
-                    size_t sended=write(client_socket,parseData.outBuffer.c_str(),parseData.outBuffer.size());
-                    if(sended>0) parseData.outBuffer.erase(0,sended);
-                    else break;
-                }
-            }else if(parseData.recvLength!=EINTR && parseData.recvLength!=EWOULDBLOCK && parseData.recvLength!=EAGAIN){
-                epoll_ctl(_epoll, EPOLL_CTL_DEL, client_socket,0);
-                --_servedSocketsCount;
-                close(client_socket);
-                _parseInfo.erase(client_socket);
-            }
-        }
-        if (event.events & EPOLLOUT){
-            while(parseData.outBuffer.size()){
-                size_t sended=write(client_socket,parseData.outBuffer.c_str(),parseData.outBuffer.size());
-                if(sended>0)parseData.outBuffer.erase(0,sended);
-                else break;
-            }
-        }
-
+        ConnectionData &parseData=*static_cast<ConnectionData*>(event.data.ptr);
         if((event.events & EPOLLHUP)|| (event.events & EPOLLERR)){
-            epoll_ctl(_epoll, EPOLL_CTL_DEL, client_socket,0);
-            --_servedSocketsCount;
-            close(client_socket);
-            _parseInfo.erase(client_socket);
+            closeConnection(&parseData);
+        }
+        try{
+            if (event.events & EPOLLIN){
+                recvRequest(&parseData);
+                sendAnswer(&parseData);
+            }
+            if (event.events & EPOLLOUT){
+                sendAnswer(&parseData);
+            }
+        }catch(const ConnectionClosedException& e){
+            closeConnection(&parseData);
         }
     }
+}
 
+void Worker::closeConnection(ConnectionData *pd)
+{
+    epoll_ctl(_epoll, EPOLL_CTL_DEL, pd->socket,0);
+    close(pd->socket);
+    connections.remove(pd);
+    delete pd;
+}
+
+void Worker::recvRequest(ConnectionData *pd)
+{
+    int socket=pd->socket;
+    int recvLength;
+    bool isProtocolCorrect;
+    do{
+        if((recvLength = read(socket, _buffer, bufferLength))>=0) {
+            isProtocolCorrect=parseAndExecute(_buffer,recvLength,*pd);
+        }else{
+            if(errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN){
+                throw ConnectionClosedException();
+            }else{
+                break;
+            }
+        }
+        if(!isProtocolCorrect){
+            throw ConnectionClosedException();
+        }
+    }while(true);
+}
+
+
+void Worker::sendAnswer(ConnectionData *pd)
+{
+    int sendLength=10;
+    while(pd->out.size()>0){
+        sendLength=write(pd->socket,pd->out.begin()->c_str(),pd->out.begin()->size());
+        if(sendLength>=0){
+            if(sendLength==pd->out.begin()->size()){
+                pd->out.pop_front();
+            }else{
+                pd->out.begin()->erase(sendLength);
+            }
+        }else{
+            if(errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN){
+                throw ConnectionClosedException();
+            }else{
+                break;
+            }
+        }
+    }
 }
 
 } // namespace NonBlocking
