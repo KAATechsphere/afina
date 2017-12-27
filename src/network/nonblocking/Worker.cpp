@@ -47,6 +47,7 @@ struct ConnectionData{
         socket=connectionSocket;
         readBodyLength=0;
         bodyLength=0;
+        state=ParseState::CmdWaiting;
     }
 };
 
@@ -140,7 +141,7 @@ bool Worker::parseAndExecute(char* buffer,size_t bufferLen,ConnectionData &pd){
             break;
         case ParseState::ValueWaiting:
             appendLength=std::min(pd.bodyLength-pd.readBodyLength+2,bufferLen-(parsedPtr-buffer));
-            std::copy(parsedPtr,parsedPtr+appendLength,std::back_inserter(pd.dataBuffer));
+            std::copy(parsedPtr,parsedPtr+appendLength-2,std::back_inserter(pd.dataBuffer));
             parsedPtr+=appendLength;
             pd.readBodyLength+=appendLength;
             if(pd.readBodyLength==pd.bodyLength+2){
@@ -155,9 +156,11 @@ bool Worker::parseAndExecute(char* buffer,size_t bufferLen,ConnectionData &pd){
             }catch(std::exception &e){
                 out+=std::string("SERVER_ERROR ")+e.what()+"\r\n";
                 res=false;
+                pd.parser.Reset();
                 continue;
             }
             pd.state=ParseState::CmdWaiting;
+            pd.parser.Reset();
             break;
         }
         if(parsedPtr>=buffer+bufferLen && pd.state!=ParseState::CmdExecuting){
@@ -277,7 +280,7 @@ void Worker::handleEvent(struct epoll_event &event)
             make_socket_non_blocking(client_socket);
 
             struct epoll_event client_sock_event;
-            client_sock_event.events=EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+            client_sock_event.events=EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLHUP | EPOLLERR;
             client_sock_event.data.fd=client_socket;
             ConnectionData *pd=new ConnectionData(client_socket);
             client_sock_event.data.ptr=(void*)pd;
@@ -329,7 +332,8 @@ void Worker::recvRequest(ConnectionData *pd)
         if((recvLength = read(socket, _buffer, bufferLength))>0) {
             isProtocolCorrect=parseAndExecute(_buffer,recvLength,*pd);
         }else{
-            if(errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN){
+            int errnn=errno;
+            if((errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN) || recvLength==0){
                 throw ConnectionCloseException();
             }else{
                 break;
@@ -347,14 +351,14 @@ void Worker::sendAnswer(ConnectionData *pd)
     int sendLength=10;
     while(pd->out.size()>0){
         sendLength=write(pd->socket,pd->out.begin()->c_str(),pd->out.begin()->size());
-        if(sendLength>=0){
+        if(sendLength>0){
             if(sendLength==pd->out.begin()->size()){
                 pd->out.pop_front();
             }else{
                 pd->out.begin()->erase(sendLength);
             }
         }else{
-            if(errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN){
+            if((errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN) || sendLength==0){
                 throw ConnectionCloseException();
             }else{
                 break;
