@@ -255,7 +255,7 @@ void Worker::OnRun(int server_socket) {
 void Worker::handleEvent(struct epoll_event &event)
 {
     int socket=event.data.fd;
-    if(socket=_serverSocket){
+    if(socket==_serverSocket){
         while(true){
             struct sockaddr in_addr;
             socklen_t in_len = sizeof(in_addr);
@@ -277,7 +277,7 @@ void Worker::handleEvent(struct epoll_event &event)
             make_socket_non_blocking(client_socket);
 
             struct epoll_event client_sock_event;
-            client_sock_event.events=EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLERR;
+            client_sock_event.events=EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
             client_sock_event.data.fd=client_socket;
             ConnectionData *pd=new ConnectionData(client_socket);
             client_sock_event.data.ptr=(void*)pd;
@@ -289,9 +289,11 @@ void Worker::handleEvent(struct epoll_event &event)
                 return;
             }
 
+            std::cout<<"Connection accepted!"<<std::endl;
             connections.push_back(pd);
         }
     }else{
+        std::cout<<"Client is being served"<<std::endl;
         ConnectionData &parseData=*static_cast<ConnectionData*>(event.data.ptr);
         if((event.events & EPOLLHUP)|| (event.events & EPOLLERR)){
             closeConnection(&parseData);
@@ -304,7 +306,7 @@ void Worker::handleEvent(struct epoll_event &event)
             if (event.events & EPOLLOUT){
                 sendAnswer(&parseData);
             }
-        }catch(const ConnectionClosedException& e){
+        }catch(const ConnectionCloseException& e){
             closeConnection(&parseData);
         }
     }
@@ -324,17 +326,17 @@ void Worker::recvRequest(ConnectionData *pd)
     int recvLength;
     bool isProtocolCorrect;
     do{
-        if((recvLength = read(socket, _buffer, bufferLength))>=0) {
+        if((recvLength = read(socket, _buffer, bufferLength))>0) {
             isProtocolCorrect=parseAndExecute(_buffer,recvLength,*pd);
         }else{
             if(errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN){
-                throw ConnectionClosedException();
+                throw ConnectionCloseException();
             }else{
                 break;
             }
         }
         if(!isProtocolCorrect){
-            throw ConnectionClosedException();
+            throw ConnectionCloseException();
         }
     }while(true);
 }
@@ -353,7 +355,7 @@ void Worker::sendAnswer(ConnectionData *pd)
             }
         }else{
             if(errno!=EINTR && errno!=EWOULDBLOCK && errno!=EAGAIN){
-                throw ConnectionClosedException();
+                throw ConnectionCloseException();
             }else{
                 break;
             }
